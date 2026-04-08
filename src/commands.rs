@@ -1,10 +1,9 @@
 use crate::netease::NeteaseClient;
 use crate::proxy::get_auto_proxy;
-use crate::utils::{extract_id, get_download_path, sanitize_file_name};
+use crate::utils::{DownloadPath, extract_id, get_download_path, sanitize_extension, sanitize_file_name};
 use anyhow::{Context, Result, anyhow};
 use futures_util::StreamExt;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
-use std::path::Path;
 use tokio::io::AsyncWriteExt;
 use tokio::time::{Duration, timeout};
 
@@ -13,13 +12,11 @@ fn progress_style() -> ProgressStyle {
         .unwrap_or_else(|_| ProgressStyle::default_bar())
 }
 
-async fn write_lyrics(path: &Path, lyrics: &str) -> Result<()> {
-    tokio::fs::write(path, lyrics.as_bytes())
-        .await
-        .with_context(|| format!("failed writing lyrics file: {}", path.display()))
+async fn write_lyrics(path: &DownloadPath, lyrics: &str) -> Result<()> {
+    path.write_bytes(lyrics.as_bytes()).await
 }
 
-async fn stream_download(client: &reqwest::Client, url: &str, out_path: &Path, label: &str) -> Result<()> {
+async fn stream_download(client: &reqwest::Client, url: &str, out_path: &DownloadPath, label: &str) -> Result<()> {
     let resp = client
         .get(url)
         .send()
@@ -35,9 +32,7 @@ async fn stream_download(client: &reqwest::Client, url: &str, out_path: &Path, l
     bar.set_style(progress_style());
     bar.set_message(label.to_string());
 
-    let mut file = tokio::fs::File::create(out_path)
-        .await
-        .with_context(|| format!("failed creating file: {}", out_path.display()))?;
+    let mut file = out_path.create_file().await?;
 
     let mut stream = resp.bytes_stream();
     let mut downloaded: u64 = 0;
@@ -53,7 +48,7 @@ async fn stream_download(client: &reqwest::Client, url: &str, out_path: &Path, l
     bar.finish_with_message(format!("completed: {label}"));
 
     if total > 0 && downloaded < ((total as f64) * 0.99) as u64 {
-        let _ = tokio::fs::remove_file(out_path).await;
+        let _ = out_path.remove_file().await;
         return Err(anyhow!("incomplete download"));
     }
 
@@ -98,10 +93,12 @@ pub async fn download_song(
             }
 
             let audio_url = availability.url.as_ref().expect("checked is_some");
-            let ext = availability
-                .file_type
-                .clone()
-                .unwrap_or_else(|| "mp3".to_string());
+            let ext = sanitize_extension(
+                &availability
+                    .file_type
+                    .clone()
+                    .unwrap_or_else(|| "mp3".to_string()),
+            );
             println!(
                 "Quality: {}, bitrate: {} kbps, format: {}",
                 availability.quality.clone().unwrap_or_else(|| "unknown".to_string()),
@@ -195,7 +192,12 @@ pub async fn download_album(client: &mut NeteaseClient, raw_album_id: &str, auto
             continue;
         }
 
-        let ext = availability.file_type.clone().unwrap_or_else(|| "mp3".to_string());
+        let ext = sanitize_extension(
+            &availability
+                .file_type
+                .clone()
+                .unwrap_or_else(|| "mp3".to_string()),
+        );
         println!(
             "[{}/{}] quality: {}, bitrate: {} kbps, format: {}",
             i + 1,
@@ -246,7 +248,7 @@ pub async fn download_album(client: &mut NeteaseClient, raw_album_id: &str, auto
             let total = resp.content_length().unwrap_or(0);
             pb.set_length(total);
 
-            let mut file = tokio::fs::File::create(&audio_path).await?;
+            let mut file = audio_path.create_file().await?;
             let mut downloaded = 0u64;
             let mut stream = resp.bytes_stream();
             while let Some(chunk) = stream.next().await {
@@ -265,7 +267,7 @@ pub async fn download_album(client: &mut NeteaseClient, raw_album_id: &str, auto
             Ok(()) => success += 1,
             Err(err) => {
                 failed += 1;
-                let _ = tokio::fs::remove_file(&audio_path).await;
+                let _ = audio_path.remove_file().await;
                 pb.abandon_with_message(format!("failed: {file_name}"));
                 println!("[{}/{}] failed: {} ({err})", i + 1, album.songs.len(), file_name);
             }

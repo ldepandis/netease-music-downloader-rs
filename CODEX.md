@@ -8,7 +8,7 @@ This software is a command-line application that can:
 
 The system goal is to reliably produce local media/lyrics files, even in unstable network conditions, by combining direct access, proxy fallback, retries, and defensive file handling.
 
-Current package version: `0.10.0`.
+Current package version: `0.11.0`.
 
 ## 2. Functional Scope
 The specification covers only local runtime behavior:

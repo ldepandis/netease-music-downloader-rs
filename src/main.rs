@@ -4,10 +4,11 @@ mod proxy;
 mod types;
 mod utils;
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Result, anyhow};
 use clap::{Parser, Subcommand};
 use commands::{download_album, download_album_lyrics, download_song, download_song_lyrics};
 use netease::NeteaseClient;
+use utils::resolve_input_file_path;
 
 #[derive(Parser, Debug)]
 #[command(name = "netease-dl-rs")]
@@ -48,8 +49,8 @@ enum Commands {
 }
 
 fn load_ids_from_file(path: &str) -> Result<Vec<String>> {
-    let content = std::fs::read_to_string(path)
-        .with_context(|| format!("failed reading id file: {path}"))?;
+    let path = resolve_input_file_path(path)?;
+    let content = path.read_to_string()?;
 
     Ok(content
         .lines()
@@ -123,24 +124,30 @@ mod tests {
     #[test]
     fn load_ids_from_file_ignores_comments_and_empty_lines() {
         let dir = tempdir().expect("tempdir");
+        let original_dir = std::env::current_dir().expect("current dir");
+        std::env::set_current_dir(dir.path()).expect("switch current dir");
         let file = dir.path().join("ids.txt");
         std::fs::write(&file, "123\n# comment\n\n456\n").expect("write ids file");
 
-        let ids = load_ids_from_file(file.to_str().expect("utf8 path")).expect("load ids");
+        let ids = load_ids_from_file("ids.txt").expect("load ids");
+        std::env::set_current_dir(original_dir).expect("restore current dir");
         assert_eq!(ids, vec!["123".to_string(), "456".to_string()]);
     }
 
     #[test]
     fn merge_ids_deduplicates_and_sorts() {
         let dir = tempdir().expect("tempdir");
+        let original_dir = std::env::current_dir().expect("current dir");
+        std::env::set_current_dir(dir.path()).expect("switch current dir");
         let file = dir.path().join("ids.txt");
         std::fs::write(&file, "3\n2\n").expect("write ids file");
 
         let merged = merge_ids(
             vec!["2".to_string(), "1".to_string(), "1".to_string()],
-            Some(file.to_str().expect("utf8 path").to_string()),
+            Some("ids.txt".to_string()),
         )
         .expect("merge ids");
+        std::env::set_current_dir(original_dir).expect("restore current dir");
 
         assert_eq!(
             merged,
